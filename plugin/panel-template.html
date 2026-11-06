@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Agent Dock · 子代理</title>
+        <style>/* PANEL_CSS */</style>
+    </head>
+    <body>
+        <header class="app-header">
+            <div class="app-title"><span class="branch-icon" aria-hidden="true"><img src="__AGENT_DOCK_ICON__" width="22" height="22" alt=""></span><h1>Agent Dock</h1><span class="count" id="count">0</span></div>
+            <div class="header-actions"><span class="connection" id="connection">正在连接</span><button class="icon-button" id="refresh" aria-label="刷新会话" title="刷新会话"><i data-lucide="refresh-cw"></i></button></div>
+        </header>
+        <div id="error" class="error-banner" role="alert" hidden></div>
+        <div id="status-message" class="status-message" hidden>
+            <i data-lucide="circle-check"></i>
+            <span id="status-message-text" role="status" aria-live="polite" aria-atomic="true"></span>
+            <button id="dismiss-message" class="icon-button" aria-label="关闭提示" title="关闭提示"><i data-lucide="x"></i></button>
+        </div>
+        <main class="workspace">
+            <aside class="sidebar">
+                <div class="sidebar-heading"><span>会话</span><button id="create" class="icon-button" aria-label="新建子代理" title="新建子代理"><i data-lucide="plus"></i></button></div>
+                <input id="search" type="search" placeholder="搜索子代理" aria-label="搜索子代理">
+                <div class="filters" aria-label="会话筛选"><button data-filter="current" aria-pressed="true">会话</button><button data-filter="archive" aria-pressed="false">归档</button></div>
+                <nav id="agents" aria-label="子代理列表"></nav>
+                <footer class="sidebar-footer">Agent Dock <span>本地连接</span></footer>
+            </aside>
+            <section class="agent-pane" aria-label="子代理详情">
+                <header class="agent-header"><div><h2 id="agent-title">选择一个子代理</h2><p id="agent-meta">查看对话与执行进度</p></div><div class="header-actions"><span id="agent-state" class="status-dot" role="img" hidden></span><button id="archive" class="secondary" disabled>归档</button></div></header>
+                <section id="permissions" class="permissions" aria-label="待审批操作" hidden></section>
+                <div id="usage-strip" class="usage-strip" aria-label="会话用量概览"></div>
+                <div class="detail-tabs"><button data-view="conversation" aria-pressed="true">对话</button><button data-view="usage" aria-pressed="false">用量</button><button data-view="diagnostics" aria-pressed="false">诊断</button></div>
+                <div id="conversation" class="conversation" role="log" aria-label="代理对话"></div>
+                <div id="usage" class="usage" hidden></div>
+                <div id="diagnostics" class="diagnostics" hidden></div>
+                <p id="closed-hint" class="closed-hint" hidden>会话已关闭，历史记录仍可查看</p>
+                <form id="composer" class="composer">
+                    <label class="sr-only" for="prompt">发送后续指令</label>
+                    <textarea id="prompt" rows="2" placeholder="发送后续指令…" disabled></textarea>
+                    <div id="prompt-preview" class="prompt-preview markdown" role="region" aria-label="Markdown 预览" hidden></div>
+                    <div class="composer-footer">
+                        <span id="composer-hint">选择一个可用会话</span>
+                        <div class="composer-actions"><button type="button" id="preview-toggle" class="preview-toggle" aria-pressed="false" aria-controls="prompt-preview" disabled>预览</button><button type="button" id="cancel" class="secondary" hidden>停止</button><button type="submit" id="send" class="primary" aria-label="发送" title="发送" disabled><i data-lucide="arrow-up"></i></button></div>
+                    </div>
+                </form>
+            </section>
+        </main>
+        <dialog id="session-setup" class="session-setup" aria-labelledby="setup-title" aria-describedby="setup-description">
+            <div class="setup-heading"><h2 id="setup-title">新建子代理</h2><p id="setup-description">选择 Agent、模型与思考强度，配置好后开始对话。</p></div>
+            <p id="setup-status" class="setup-status" role="status" hidden></p>
+            <p id="setup-error" class="setup-error" role="alert" hidden></p>
+            <div class="setup-fields"></div>
+            <p class="setup-note">选项由 Agent 提供，切换模型后会自动更新。</p>
+            <div class="setup-actions"><button type="button" id="setup-cancel" class="secondary">取消</button><button type="button" id="setup-confirm" class="primary" disabled>开始使用</button></div>
+        </dialog>
+        <script type="module">/* PANEL_JS */</script>
+    </body>
+</html>

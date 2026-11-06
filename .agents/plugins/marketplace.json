@@ -1,0 +1,12 @@
+{
+    "name": "agent-dock",
+    "interface": { "displayName": "Agent Dock Beta" },
+    "plugins": [
+        {
+            "name": "agent-dock",
+            "source": { "source": "local", "path": "./plugin" },
+            "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+            "category": "Developer Tools"
+        }
+    ]
+}

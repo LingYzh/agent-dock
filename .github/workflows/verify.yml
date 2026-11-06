@@ -1,0 +1,20 @@
+name: Verify Windows beta
+on:
+    push:
+    pull_request:
+permissions:
+    contents: read
+jobs:
+    verify:
+        runs-on: windows-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+            - run: npm ci --prefix plugin --ignore-scripts --registry=https://registry.npmjs.org
+            - run: npm test --prefix plugin
+            - run: npm run build --prefix plugin
+            - run: node scripts/release.mjs
+            - run: git diff --exit-code -- plugin/panel.html plugin/runtime-files.json plugin/.codex-plugin/plugin.json
+            - run: node plugin/verify-clean-install.mjs

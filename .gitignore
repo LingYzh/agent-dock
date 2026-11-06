@@ -1,0 +1,12 @@
+**/node_modules/
+**/work/
+**/.local.json
+**/.env
+**/.env.*
+**/settings.json
+**/installation.json
+**/.ready.json
+dist/
+.qa/
+.publish/
+*.log
