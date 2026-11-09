@@ -16,5 +16,5 @@ jobs:
             - run: npm test --prefix plugin
             - run: npm run build --prefix plugin
             - run: node scripts/release.mjs
-            - run: git diff --exit-code -- plugin/panel.html plugin/runtime-files.json plugin/.codex-plugin/plugin.json
+            - run: git diff --exit-code -- plugin/panel.html plugin/runtime-files.json plugin/plugin.json
             - run: node plugin/verify-clean-install.mjs

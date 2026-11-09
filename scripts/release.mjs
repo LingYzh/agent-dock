@@ -16,7 +16,7 @@ export const runtimeFiles = [
 const files = {};
 for (const file of runtimeFiles) files[file] = createHash('sha256').update(await readFile(path.join(root, 'plugin', file))).digest('hex');
 await writeFile(path.join(root, 'plugin/runtime-files.json'), JSON.stringify({ version, files }, null, 4) + '\n');
-const manifestPath = path.join(root, 'plugin/.codex-plugin/plugin.json');
+const manifestPath = path.join(root, 'plugin/plugin.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 manifest.version = version;
 await writeFile(manifestPath, JSON.stringify(manifest, null, 4) + '\n');

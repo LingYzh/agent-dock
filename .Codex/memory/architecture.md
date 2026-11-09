@@ -1,7 +1,10 @@
 # Public beta architecture
 
 - Root contains installation/release documentation and the Git marketplace catalog. plugin/ is the self-contained source loaded by the Codex plugin cache.
-- Public MCP configuration uses Node and ${PLUGIN_ROOT}/bootstrap.mjs. No developer workstation path is registered.
+- Public MCP configuration uses portable Agent Plugins `plugin.json` and `mcp.json`, Node, and `${PLUGIN_ROOT}/bootstrap.mjs`. The desktop build tested left this placeholder literal in legacy `.mcp.json`, which failed before startup when used as `cwd` and failed to load the script when used as argv. The portable manifest expands it; bootstrap resolves its files relative to its own URL. Do not add a developer workstation path to the package.
+- The portable stdio schema does not accept Codex-specific timeouts. Prepare the runtime before first discovery via `install.ps1` to keep dependency downloads outside the host startup deadline.
+- Release acceptance for the plugin manifest must use the desktop app-server's MCP discovery and UI resource read against a fresh marketplace install. A direct SDK connection with an already resolved path misses manifest expansion errors. Native discovery and the visible current-chat sidebar are separate checks.
+- The synthetic prompt timeout regression handshakes with its fixture first. Its short deadline is for prompt progress, not the time Windows takes to start Node.
 - Bootstrap discovers a user-local home (or explicit custom location), verifies an allowlisted runtime manifest, installs pinned production dependencies from the public npm registry, and starts MCP from a versioned runtime directory. Diagnostic output never enters MCP stdout.
 - Per-user state is independent of checkout/cache/runtime versions. An explicit installer may write a small user-local locator so custom-drive installations remain discoverable without system environment changes.
 - Provider settings belong to the installer. AGY uses native executable discovery; Claude uses its adapter and standard authentication/configuration. The source contains no subscription credentials or author configuration.

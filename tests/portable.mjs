@@ -55,6 +55,6 @@ assert.deepEqual(Object.keys(panelSync(registry, { id: record.id, after: merged.
 assert.equal(recoveryMessage([{ seq: 207, method: 'bridge/recovered', params: {} }], 207), undefined);
 assert.equal(cacheHitRate({ inputTokens: 20, cachedReadTokens: 80, cachedWriteTokens: 0 }), 80);
 assert.equal(cacheHitRate({ inputTokens: 20, cachedReadTokens: 80 }), null);
-const mcp = JSON.parse(readFileSync(path.join(root, 'plugin/.mcp.json'), 'utf8'));
+const mcp = JSON.parse(readFileSync(path.join(root, 'plugin/mcp.json'), 'utf8'));
 assert.deepEqual(mcp.mcpServers.agy_acp_probe.args, ['${PLUGIN_ROOT}/bootstrap.mjs']);
 console.log(JSON.stringify({ passed: true, portablePaths: true, precedence: true, optionalProviders: true, credentialBoundary: true, syntheticPagedHistory: true }));

@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 function send(value) { process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\\n'); }
 createInterface({input:process.stdin}).on('line', (message) => {
     const req = JSON.parse(message);
+    if (req.method === 'initialize') return send({id:req.id,result:{}});
     if (req.params.mode === 'silent') return;
     let updates=0;
     const timer=setInterval(() => {
@@ -14,6 +15,8 @@ createInterface({input:process.stdin}).on('line', (message) => {
 });`;
 const client = new AcpClient(process.execPath, process.cwd(), () => {}, {args:['--input-type=module','-e',fake]});
 try {
+    // Wait for the fixture process so the short deadline measures prompt silence.
+    await client.request('initialize', {}, 5000);
     const started = Date.now();
     assert.equal((await client.request('session/prompt',{sessionId:'streaming'},180)).stopReason,'end_turn');
     assert.ok(Date.now()-started > 180);

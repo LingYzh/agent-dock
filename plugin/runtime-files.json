@@ -1,8 +1,8 @@
 {
-    "version": "1.1.0-beta.2",
+    "version": "1.1.0-beta.3",
     "files": {
-        "package.json": "c8bdaa904179e384d8ded21c5e6860fc1a758ded0bbf342fc4af2b8c12cc04c7",
-        "package-lock.json": "fb147fa65e6aba92790529289019fe9f116c33ac77ef3543f36b82921a4176e6",
+        "package.json": "7b9211e0e231a3a316d1b8b8be14667f5191c37bce3a426be00be80be0abddb5",
+        "package-lock.json": "dedbcda93623cef213b006244dd126b89e7e2f49439cab845707493255dce948",
         "acp.mjs": "17cae85f425915adae201e0548b1524123c927696fe73b05302dff9a965166ea",
         "acp-pool.mjs": "c28e03cf58fd75cf5c7874dac88a46d161cb542a5e4b807f49dc2ea993aef883",
         "ensure-service.mjs": "63aea38fe7ed75724896e0c5805d5eceee7c638e1328b8f7982065a1b49417f6",

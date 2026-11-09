@@ -2,7 +2,7 @@
 
 Manage Antigravity and Claude Code as local ACP subagents from Codex desktop, with a shared conversation panel.
 
-**Windows beta · `1.1.0-beta.2` · MIT**
+**Windows beta · `1.1.0-beta.3` · MIT**
 
 Agent Dock provides root tools to create, configure, prompt, inspect, cancel and close agents. Its panel displays conversations, received thought text, grouped tool calls, permission requests, usage and archives. Chats using the same installation share the same agents. Sessions survive bridge restarts when their provider supports recovery; interrupted tasks and approvals are never automatically replayed.
 
@@ -11,7 +11,7 @@ This is a community Git marketplace plugin, not an official OpenAI directory lis
 ## Requirements
 
 - Windows 10/11, Node.js **22 or newer**, including npm.
-- A Codex desktop version that supports local plugins and MCP Apps. Install Codex CLI and Git for the commands below.
+- A Codex desktop version that supports local plugins, portable Agent Plugins manifests, and MCP Apps. Install Codex CLI and Git for the commands below.
 - Network access to GitHub and `registry.npmjs.org` for first installation.
 - At least one configured Agent when you want to send tasks:
     - **Antigravity**: install its native `agy.exe`, verify `agy acp` is available, and sign in through that CLI. Agent Dock checks `AGY_BIN`, `PATH`, `%LOCALAPPDATA%\agy\bin\agy.exe`, then `%USERPROFILE%\.agy\bin\agy.exe`.
@@ -24,17 +24,17 @@ The panel can start without either Agent being logged in. Environment checks do 
 In PowerShell:
 
 ```powershell
-codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.2
+codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.3
 codex plugin add agent-dock@agent-dock
 ```
 
-Refresh the desktop's plugin connection (or restart the desktop). On first use, Agent Dock verifies its bundled runtime files and installs pinned npm dependencies into your user data directory. This can take a few minutes on a slow connection; later launches reuse the prepared runtime. If startup times out, run the installer below to prepare dependencies before reopening the panel.
+Before opening the panel for the first time, run `./install.ps1 -SkipPluginRegistration` from the corresponding release to prepare the pinned runtime dependencies. A fresh dependency install can exceed the desktop's MCP startup deadline. Then refresh the desktop's plugin connection (or restart the desktop); later launches reuse the prepared runtime.
 
 In the current chat, open the right content panel's **+ → More tools → Agent Dock**. Clicking the plugin's management card opens plugin details instead of the agent panel. You can also mention Agent Dock in the chat and ask it to open the panel or create an agent.
 
 ## Check the environment / choose another drive
 
-Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.2), or clone this repository at that tag. Run inside the extracted/cloned directory:
+Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.3), or clone this repository at that tag. Run inside the extracted/cloned directory:
 
 ```powershell
 # Read-only environment report; no Agent prompts or authentication checks.

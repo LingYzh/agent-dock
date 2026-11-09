@@ -23,11 +23,13 @@ if (-not $SkipPluginRegistration) {
     $git = Get-Command git.exe -ErrorAction SilentlyContinue
     if (-not $codex) { throw 'Codex CLI is required to register the Git marketplace. Install it first, or use -SkipPluginRegistration and add the source in the desktop.' }
     if (-not $git) { throw 'Git for Windows is required to add a Git marketplace. Install Git and retry.' }
+    $package = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'plugin/package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $releaseRef = "v$($package.version)"
 }
 & $node $bootstrap --install @options
 if ($LASTEXITCODE -ne 0) { throw 'Runtime preparation failed. Registration was not attempted.' }
 if (-not $SkipPluginRegistration) {
-    & $codex.Source plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.2 --json
+    & $codex.Source plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref $releaseRef --json
     if ($LASTEXITCODE -ne 0) { throw 'Git marketplace registration failed. Runtime files are prepared; retry registration after fixing network access.' }
     & $codex.Source plugin add agent-dock@agent-dock --json
     if ($LASTEXITCODE -ne 0) { throw 'Plugin installation failed. Check codex plugin list and retry.' }

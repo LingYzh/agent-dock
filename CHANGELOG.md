@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0-beta.3 — 2026-11-09
+
+- Fix Windows desktop discovery of Agent Dock. Use portable Agent Plugins manifests so Codex expands the installed path before starting Node. The launcher does not need a working directory override.
+- Document runtime preparation before opening the panel on a fresh installation, so npm downloads do not compete with the host's startup deadline.
+
 ## 1.1.0-beta.2 — 2026-11-09
 
 - Archive inactive sessions locally even when the ACP provider times out or rejects its optional close request. A failed local write leaves the session unarchived.

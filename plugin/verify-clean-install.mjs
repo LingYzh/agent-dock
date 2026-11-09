@@ -41,8 +41,15 @@ assert.equal(await readFile(path.join(installed.runtime, '.ready.json'), 'utf8')
 const client = new Client({ name: 'clean-profile-check', version: '1' });
 let service;
 try {
-    // Exercise the exact public launcher; no publisher state, AGY, CCS or login.
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(plugin, 'bootstrap.mjs')], cwd: plugin, env }));
+    // Exercise the declared launcher from an unrelated directory. This tests
+    // the bootstrap, while native Codex discovery tests host path expansion.
+    const { mcpServers: { agy_acp_probe: launch } } = JSON.parse(await readFile(path.join(plugin, 'mcp.json'), 'utf8'));
+    await client.connect(new StdioClientTransport({
+        command: launch.command,
+        args: launch.args.map(arg => arg.replace('${PLUGIN_ROOT}', () => plugin)),
+        cwd: launch.cwd ?? root,
+        env,
+    }));
     const tools = await client.listTools();
     assert.equal(tools.tools.length, 12);
     const list = await client.callTool({ name: 'agent_list', arguments: {} });
