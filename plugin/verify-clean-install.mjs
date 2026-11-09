@@ -44,7 +44,7 @@ try {
     // Exercise the exact public launcher; no publisher state, AGY, CCS or login.
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(plugin, 'bootstrap.mjs')], cwd: plugin, env }));
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 11);
+    assert.equal(tools.tools.length, 12);
     const list = await client.callTool({ name: 'agent_list', arguments: {} });
     assert.ok(!list.isError);
     assert.deepEqual(list.structuredContent.agents, []);

@@ -2,7 +2,7 @@
 
 Manage Antigravity and Claude Code as local ACP subagents from Codex desktop, with a shared conversation panel.
 
-**Windows beta · `1.1.0-beta.1` · MIT**
+**Windows beta · `1.1.0-beta.2` · MIT**
 
 Agent Dock provides root tools to create, configure, prompt, inspect, cancel and close agents. Its panel displays conversations, received thought text, grouped tool calls, permission requests, usage and archives. Chats using the same installation share the same agents. Sessions survive bridge restarts when their provider supports recovery; interrupted tasks and approvals are never automatically replayed.
 
@@ -24,7 +24,7 @@ The panel can start without either Agent being logged in. Environment checks do 
 In PowerShell:
 
 ```powershell
-codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.1
+codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.2
 codex plugin add agent-dock@agent-dock
 ```
 
@@ -34,7 +34,7 @@ In the current chat, open the right content panel's **+ → More tools → Agent
 
 ## Check the environment / choose another drive
 
-Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.1), or clone this repository at that tag. Run inside the extracted/cloned directory:
+Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.2), or clone this repository at that tag. Run inside the extracted/cloned directory:
 
 ```powershell
 # Read-only environment report; no Agent prompts or authentication checks.
@@ -70,7 +70,7 @@ Environment variables must be visible to the desktop process; restart the deskto
 - Root can use `agent_spawn` with `provider`, `model` and `thoughtLevel`, then `agent_send` / `agent_get` / `agent_wait`. Unsupported model or effort values fail explicitly.
 - Omitted AGY model defaults to `gemini-3.8-flash`; this requires that model to be available to your account. Choose another actual catalog entry when needed. Claude's default comes from its own configuration.
 - The bridge surfaces ACP permission requests with the exact offered choices. It does not override the Agent's existing permission policy; an Agent configured to auto-allow may not ask.
-- All agents currently work in `<state>\work\fixture`, a shared working directory. This is not the current root chat's project and is not a sandbox. Per-agent project/worktree selection is not included in this beta.
+- The default working directory is `<state>\work\fixture`. It is shared across default sessions and is separate from the current Codex project. Git worktrees are opt-in.
 - Current and archived lists are separate. Closed sessions remain readable. Ordinary recovery notifications disappear after four seconds; significant interrupted/recreated notices remain in history. Diagnostics retain original events.
 - Usage comes from the Agent, not a subscription-billing API. Unknown fields stay unknown. Cache hit rate excludes output. Thought text is displayed only when the Agent actually sends it.
 
@@ -87,7 +87,7 @@ codex plugin remove agent-dock@agent-dock
 codex plugin marketplace remove agent-dock
 ```
 
-Uninstalling the plugin does not delete runtime or conversations. Stop using the plugin and close the desktop before manually removing its data directory. Keep the `state` folder if you want to preserve conversations. Do not delete someone else's shared state.
+Uninstalling the plugin does not delete runtime or conversations. Stop using the plugin and close the desktop before manually removing its data directory. Keep the `state` folder to preserve conversations, and commit or move any changes in `state/work/worktrees` before removing it.
 
 ## Troubleshooting
 
@@ -102,6 +102,20 @@ Uninstalling the plugin does not delete runtime or conversations. Stop using the
 | Panel shows an old UI | Refresh the plugin connection and open a fresh Agent Dock panel; a loaded HTML document may be cached by the host. |
 | A local file link does not open | The host controls local-file links. The panel retains the destination for copying when needed. |
 | Recovery fails | History remains readable with an error; the bridge will not automatically replay a task or replace a history-bearing session. |
+
+## History, archives and workspace isolation
+
+Opening a conversation shows its latest page. Scroll to the top and select **加载更早的记录** to read another page. The diagnostics view shows how many events are loaded; usage totals still cover the full conversation. Archiving an inactive session saves the local history before attempting provider cleanup.
+
+The timeline mounts only rows around the viewport. Large tool output travels as a preview during normal sync; expand it to fetch the original one page at a time. Diagnostics can read individual original events without fetching the entire transcript. Archived sessions show the local save, ACP close result (including timeout or already closed), and process cleanup separately.
+
+To use a worktree, check **使用独立 Git worktree** in the new session dialog and enter an absolute local repository path. Root can opt in with `agent_spawn({ worktreeRepo: "...", ... })`. Git creates an `agent-dock/<session-id>` branch and a checkout under `<state>\work\worktrees` from the source repository's committed HEAD. Uncommitted source edits are excluded. This separates Git checkouts; it does not restrict filesystem permissions. Archive retains the directory and branch so changes remain available.
+
+On Windows, process cleanup targets the running ACP tree launched by the bridge. The managed bridge stays available while any MCP host is attached and stops about five seconds after the last connection ends. It saves session records for recovery; interrupted work is not replayed.
+
+Each bridge shares one ACP connection per provider: one Antigravity ACP process and one Claude Code ACP adapter. Claude's SDK still manages its own CLI subprocess for each session. Each session keeps its own model, reasoning level, events, approvals, and cancellation. Archiving the last session for a provider releases its shared process. If that process fails, its affected sessions show a disconnect error and keep their saved histories. To restore dedicated ACP processes for troubleshooting, set `AGENT_DOCK_AGY_ISOLATED=1` or `AGENT_DOCK_CLAUDE_ISOLATED=1` in the desktop environment before starting a fresh bridge.
+
+History paging and the archive fix require the updated bridge. If the old bridge is still running after an upgrade, finish active turns and restart that bridge before reopening the panel. The launcher deliberately reuses a running bridge for the same state directory.
 
 ## Development and validation
 

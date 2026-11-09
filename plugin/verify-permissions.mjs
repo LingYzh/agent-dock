@@ -12,6 +12,7 @@ function send(value) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...
 createInterface({ input: process.stdin }).on('line', function receive(line) {
     const message = JSON.parse(line);
     if (message.method === 'session/prompt') {
+        if (message.params.sessionId === 'independent') return;
         prompt = message;
         results = [];
         for (const id of [101, 102]) send({ id, method: 'session/request_permission', params: { sessionId: 'test', id: 'untrusted-id', toolCall: { toolCallId: String(id), title: '<b>Untrusted title</b>' }, options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow' }, { optionId: 'no', kind: 'reject_once', name: 'Deny' }] } });
@@ -28,31 +29,34 @@ async function waitPending() {
     return client.permissionSnapshots();
 }
 try {
-    const turn = client.request('session/prompt', {}, 500);
+    const turn = client.request('session/prompt', { sessionId: 'test' }, 500);
+    const independent = assert.rejects(client.request('session/prompt', { sessionId: 'independent' }, 500), /ACP timeout/);
     const pending = await waitPending();
     assert.notEqual(pending[0].id, 'untrusted-id');
     assert.throws(() => client.resolvePermission(pending[0].id, 'invented'), /not offered/);
     assert.equal(client.permissions.size, 2);
     // A human may take longer than the model-turn timeout to review a request.
     await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.ok([...client.pending.values()].every((request) => request.sessionId !== 'independent'), 'Other session still timed out while approvals were pending');
+    await independent;
     client.resolvePermission(pending[0].id, 'yes');
     assert.equal([...client.pending.values()][0].timer, null, 'Second outstanding approval keeps the prompt clock paused');
     assert.throws(() => client.resolvePermission(pending[0].id, 'yes'), /no longer pending/);
     client.resolvePermission(pending[1].id, 'no');
     assert.deepEqual((await turn).outcomes, [{ outcome: 'selected', optionId: 'yes' }, { outcome: 'selected', optionId: 'no' }]);
 
-    const cancelled = client.request('session/prompt', {}, 1000);
+    const cancelled = client.request('session/prompt', { sessionId: 'test' }, 1000);
     await waitPending();
     client.notify('session/cancel', { sessionId: 'test' });
     assert.deepEqual((await cancelled).outcomes, [{ outcome: 'cancelled' }, { outcome: 'cancelled' }]);
 
-    const requestCancelled = client.request('session/prompt', {}, 1000);
+    const requestCancelled = client.request('session/prompt', { sessionId: 'test' }, 1000);
     const again = await waitPending();
     client.receive(JSON.stringify({ method: '$/cancel_request', params: { requestId: 101 } }));
     client.resolvePermission(again[1].id, 'no');
     assert.deepEqual((await requestCancelled).outcomes, [{ outcome: 'cancelled' }, { outcome: 'selected', optionId: 'no' }]);
 
-    const broken = client.request('session/prompt', {}, 1000);
+    const broken = client.request('session/prompt', { sessionId: 'test' }, 1000);
     const rejected = assert.rejects(broken, /exited/);
     await waitPending();
     client.process.kill();

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { SessionStore, applySessionEvent } from './session-store.mjs';
 import { restoreSession } from './session-recovery.mjs';
 import { projectEvents } from './panel-view.mjs';
+import { AcpSessionPool } from './acp-pool.mjs';
 
 const directory = mkdtempSync(new URL('work/recovery-test-', import.meta.url).pathname.replace(/^\/([A-Z]:)/i, '$1'));
 const store = new SessionStore(directory);
@@ -78,4 +79,50 @@ for (const [label, setup, expected] of [
     assert.equal(fake.calls.some(({method})=>method==='session/prompt'), false);
     if (expected === 'error') assert.ok(fake.stopped);
 }
-console.log(JSON.stringify({passed:true, checks:['flushed journal and torn tail','owner/history/cursor persistence','stale approvals removed','interrupted turn not replayed','model/effort reconfirmed','empty Claude only recreation','history missing preserved as error','unsupported/mismatch fail closed'], promptsSent:0}));
+// Real JSON-RPC framing through one shared process: a recreated Claude session
+// must stop receiving updates addressed to its previous native ID.
+const peer = `
+    import { createInterface } from 'node:readline';
+    function send(value) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\\n'); }
+    createInterface({ input: process.stdin }).on('line', (line) => {
+        const { id, method, params } = JSON.parse(line);
+        if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+        if (method === 'session/load') {
+            if (params.sessionId === 'missing') send({ id, error: { code: -32002, message: 'Resource not found' } });
+            else send({ id, result: { configOptions: [] } });
+        }
+        if (method === 'session/new') send({ id, result: { sessionId: 'replacement', configOptions: [] } });
+        if (method === 'session/set_config_option') {
+            for (const sessionId of ['missing', params.sessionId]) send({ method: 'session/update', params: { sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: [] } } });
+            send({ id, result: { configOptions: [] } });
+        }
+        if (method === 'session/close') send({ id, result: {} });
+    });
+`;
+const pool = new AcpSessionPool({ command: process.execPath, args: ['--input-type=module', '-e', peer] }, directory);
+const observed = new Map();
+function acquire(agent) {
+    const updates = [];
+    observed.set(agent.id, updates);
+    return pool.acquire({
+        onEvent(method, params) { updates.push(params.sessionId); },
+        onPermission() { assert.fail('Unexpected fixture permission'); },
+        onDisconnect() { assert.fail('Unexpected fixture disconnect'); }
+    });
+}
+try {
+    const [missing, sibling] = ['missing', 'sibling'].map((sessionId) => ({
+        id: randomUUID(), provider: 'claude', cwd: directory, status: 'idle', sessionId, events: []
+    }));
+    for (const agent of [missing, sibling]) store.checkpoint(agent);
+    await Promise.all([missing, sibling].map((agent) => restoreSession(agent, acquire, recording)));
+    assert.equal(missing.sessionId, 'replacement');
+    assert.equal(sibling.sessionId, 'sibling');
+    await sibling.client.request('session/set_config_option', { sessionId: sibling.sessionId, configId: 'mode', value: 'default' });
+    assert.deepEqual(observed.get(missing.id), []);
+    assert.deepEqual(observed.get(sibling.id), ['sibling']);
+    await missing.client.stop();
+    await sibling.client.request('session/set_config_option', { sessionId: sibling.sessionId, configId: 'mode', value: 'default' });
+    await sibling.client.stop();
+} finally { pool.stop(); }
+console.log(JSON.stringify({passed:true, checks:['flushed journal and torn tail','owner/history/cursor persistence','stale approvals removed','interrupted turn not replayed','model/effort reconfirmed','empty Claude only recreation','history missing preserved as error','unsupported/mismatch fail closed','shared Claude rebind drops old ID'], promptsSent:0}));

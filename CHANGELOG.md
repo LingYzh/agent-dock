@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0-beta.2 — 2026-11-09
+
+- Archive inactive sessions locally even when the ACP provider times out or rejects its optional close request. A failed local write leaves the session unarchived.
+- Open long conversations at the latest page. Earlier pages load on request and preserve the reading position; usage totals still reflect the full session.
+- Keep archive-list and detail scrolling within the panel, remember list positions across filters, and wait for the MCP UI handshake before polling.
+- Avoid rewriting intact history journals before the bridge can start serving requests.
+- Stop the owned Windows ACP process tree on close. Release the shared bridge and its agents after the last MCP host disconnects, with a brief reconnect window.
+- Share an ACP process per provider across Antigravity and Claude Code sessions, with independent permissions, cancellation, history, and archive. Claude's adapter continues to manage per-session CLI subprocesses.
+- Load large tool output and original diagnostic events on demand in bounded pages. Report local archive persistence, ACP close and process cleanup separately.
+- Virtualize the conversation timeline and keep the reading anchor when prepending older pages.
+- Add opt-in Git worktrees for new sessions in the panel and root tool. Preserve the source checkout and retain worktree branches and files on archive.
+
 ## 1.1.0-beta.1 — 2026-11-06
 
 First public Git marketplace beta, based on the locally verified 1.0.9 UI and ACP bridge.

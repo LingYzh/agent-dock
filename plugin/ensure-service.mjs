@@ -59,9 +59,9 @@ export async function ensureService() {
         try {
             const ready = await runningService();
             if (ready) return ready;
-            // Hidden/lazy startup. Windows host teardown can still kill detached children;
-            // session-store and ACP load handle recovery instead of relying on detachment.
-            const child = spawn(process.execPath, [path.join(root, 'service.mjs')], { cwd: root, windowsHide: true, detached: true, stdio: 'ignore' });
+            // The bridge is shared across MCP hosts. Its authenticated leases,
+            // rather than the first host's process lifetime, control shutdown.
+            const child = spawn(process.execPath, [path.join(root, 'service.mjs'), '--mcp-managed'], { cwd: root, windowsHide: true, detached: true, stdio: 'ignore' });
             let startError;
             child.once('error', function failed(error) { startError = error; });
             child.unref();

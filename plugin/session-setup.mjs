@@ -25,6 +25,10 @@ export function createSessionSetup(invoke) {
     const confirm = dialog.querySelector('#setup-confirm');
     const status = dialog.querySelector('#setup-status');
     const errorBox = dialog.querySelector('#setup-error');
+    const isolate = dialog.querySelector('#setup-isolate');
+    const repo = dialog.querySelector('#setup-repo');
+    const worktreeFields = dialog.querySelector('#setup-worktree-fields');
+    const worktree = dialog.querySelector('.setup-worktree');
     let agent;
     let busy = false;
     let finish;
@@ -35,13 +39,19 @@ export function createSessionSetup(invoke) {
         errorBox.textContent = message;
         errorBox.hidden = !message;
     }
+    function updateConfirm() {
+        confirm.disabled = busy || !agent || !['idle', 'completed', 'cancelled'].includes(agent.status) || (isolate.checked && !repo.value.trim());
+        confirm.textContent = isolate.checked ? '创建 worktree 并开始' : '开始使用';
+    }
     function setBusy(value, message = '') {
         busy = value;
         dialog.setAttribute('aria-busy', String(value));
         status.textContent = message;
         status.hidden = !message;
         cancel.disabled = value;
-        confirm.disabled = value || !agent || !['idle', 'completed', 'cancelled'].includes(agent.status);
+        isolate.disabled = value;
+        repo.disabled = value;
+        updateConfirm();
         for (const button of fields.querySelectorAll('button')) button.disabled = value;
     }
     function closeMenus() {
@@ -167,17 +177,42 @@ export function createSessionSetup(invoke) {
         finally { setBusy(false); }
     }
     cancel.onclick = dismiss;
-    confirm.onclick = function useSession() {
+    confirm.onclick = async function useSession() {
         if (busy || confirm.disabled) return;
+        if (isolate.checked) {
+            const draft = agent;
+            setBusy(true, '正在创建 Git worktree 并启动会话…');
+            showError();
+            try {
+                agent = await invoke('agent_spawn', {
+                    provider, name: sessionName, worktreeRepo: repo.value.trim(),
+                    model: sessionChoice(draft, 'model', ['model'])?.currentValue,
+                    thoughtLevel: sessionChoice(draft, 'thought_level', ['thought_level', 'effort'])?.currentValue
+                });
+                isolate.checked = false;
+                worktreeFields.hidden = true;
+                worktree.hidden = true;
+                await invoke('agent_close', { id: draft.id });
+            } catch (error) {
+                showError(agent === draft ? error.message : `worktree 会话已创建；准备会话未归档：${error.message}。可继续使用新会话。`);
+                return;
+            } finally { setBusy(false); }
+        }
         dialog.close();
         finish(agent);
     };
+    isolate.onchange = function toggleWorktree() { worktreeFields.hidden = !isolate.checked; updateConfirm(); };
+    repo.oninput = updateConfirm;
     dialog.oncancel = function escapeDialog(event) { event.preventDefault(); void dismiss(); };
     dialog.addEventListener('pointerdown', function outsidePicker(event) { if (!event.target.closest('.setup-picker')) closeMenus(); });
 
     async function open(name) {
         agent = undefined;
         sessionName = name;
+        isolate.checked = false;
+        worktree.hidden = false;
+        repo.value = '';
+        worktreeFields.hidden = true;
         render();
         showError();
         const completion = new Promise((resolve) => { finish = resolve; });

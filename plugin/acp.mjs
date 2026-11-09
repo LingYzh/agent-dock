@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import path from 'node:path';
 import { agentEnvironment } from './identity.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -11,6 +12,7 @@ export class AcpClient {
         this.onEvent = onEvent;
         this.permissions = new Map();
         this.onPermission = options.onPermission;
+        this.onDisconnect = options.onDisconnect;
         this.process = spawn(executable, options.args || ['acp'], { cwd, env: { ...agentEnvironment(), ...options.env }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
         this.process.stderr.on('data', function ignoreDiagnosticOutput() {});
         this.process.stdin.on('error', (error) => this.fail(error));
@@ -35,7 +37,7 @@ export class AcpClient {
                 if (message.method === 'session/request_permission' && this.onPermission) {
                     const permission = { id: randomUUID(), rpcId: message.id, params: message.params, createdAt: new Date().toISOString() };
                     this.permissions.set(permission.id, permission);
-                    this.pausePromptTimers();
+                    if (permission.params.sessionId) this.pausePromptTimers(permission.params.sessionId);
                     this.onPermission('pending', permission);
                     return;
                 }
@@ -60,6 +62,7 @@ export class AcpClient {
     }
 
     request(method, params, timeout = 30000) {
+        if (this.failure || this.stopping) return Promise.reject(this.failure || new Error('ACP process is stopping'));
         const id = ++this.nextId;
         return new Promise((resolve, reject) => {
             const request = { id, method, sessionId: params?.sessionId, timeout, resolve, reject, remaining: timeout };
@@ -71,7 +74,7 @@ export class AcpClient {
 
     notify(method, params) {
         this.write({ jsonrpc: '2.0', method, params });
-        if (method === 'session/cancel') this.cancelPermissions('turn_cancelled');
+        if (method === 'session/cancel') this.cancelPermissions('turn_cancelled', true, params?.sessionId);
     }
 
     armTimer(request) {
@@ -84,7 +87,7 @@ export class AcpClient {
     }
 
     refreshPromptTimers(sessionId) {
-        if (!sessionId || this.permissions.size) return;
+        if (!sessionId || this.hasPermissions(sessionId)) return;
         for (const request of this.pending.values()) {
             if (request.method !== 'session/prompt' || request.sessionId !== sessionId || !request.timer) continue;
             // A coding turn can legitimately take much longer than one short reply.
@@ -94,17 +97,26 @@ export class AcpClient {
         }
     }
 
-    pausePromptTimers() {
+    pausePromptTimers(sessionId) {
         for (const request of this.pending.values()) {
-            if (request.method !== 'session/prompt' || !request.timer) continue;
+            if (request.method !== 'session/prompt' || (sessionId !== undefined && request.sessionId !== sessionId) || !request.timer) continue;
             clearTimeout(request.timer);
             request.remaining = Math.max(1, request.remaining - (Date.now() - request.startedAt));
             request.timer = null;
         }
     }
 
-    permissionSnapshots() {
-        return [...this.permissions.values()].map(({ id, params, createdAt }) => ({ ...params, id, createdAt }));
+    hasPermissions(sessionId) {
+        for (const permission of this.permissions.values()) {
+            if (permission.params.sessionId === sessionId) return true;
+        }
+        return false;
+    }
+
+    permissionSnapshots(sessionId) {
+        return [...this.permissions.values()]
+            .filter(({ params }) => sessionId === undefined || params.sessionId === sessionId)
+            .map(({ id, params, createdAt }) => ({ ...params, id, createdAt }));
     }
 
     resolvePermission(id, optionId, reason = 'decision', send = true) {
@@ -116,27 +128,50 @@ export class AcpClient {
         if (send) this.write({ jsonrpc: '2.0', id: permission.rpcId, result: { outcome } });
         this.permissions.delete(id);
         this.onPermission?.('resolved', { ...permission, outcome, reason, optionKind: option?.kind });
-        if (!this.permissions.size) {
-            for (const request of this.pending.values()) if (request.method === 'session/prompt' && !request.timer) this.armTimer(request);
+        const sessionId = permission.params.sessionId;
+        if (!this.hasPermissions(sessionId)) {
+            for (const request of this.pending.values()) {
+                if (request.method === 'session/prompt' && request.sessionId === sessionId && !request.timer) this.armTimer(request);
+            }
         }
         return outcome;
     }
 
-    cancelPermissions(reason, send = true) {
-        for (const id of this.permissions.keys()) this.resolvePermission(id, undefined, reason, send);
+    cancelPermissions(reason, send = true, sessionId) {
+        for (const [id, permission] of this.permissions) {
+            if (sessionId === undefined || permission.params.sessionId === sessionId) this.resolvePermission(id, undefined, reason, send);
+        }
     }
 
     fail(error) {
+        if (this.failure) return;
+        this.failure = error;
         for (const request of this.pending.values()) {
             clearTimeout(request.timer);
             request.reject(error);
         }
         this.pending.clear();
         this.cancelPermissions('transport_closed', false);
+        this.onDisconnect?.(error);
     }
 
     stop() {
-        this.cancelPermissions('session_closed');
-        this.process.kill();
+        if (this.stopping) return this.stopOutcome;
+        this.stopping = true;
+        try { this.cancelPermissions('session_closed'); }
+        finally {
+            const child = this.process;
+            if (child.pid && child.exitCode === null && child.signalCode === null) {
+                // Node's Windows kill only ends the direct child. Scope tree
+                // termination to this live, bridge-owned process, never a name.
+                if (process.platform === 'win32') {
+                    const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+                    const command = systemRoot ? path.join(systemRoot, 'System32', 'taskkill.exe') : 'taskkill.exe';
+                    const result = spawnSync(command, ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 2500 });
+                    this.stopOutcome = result.status === 0 ? 'tree_stopped' : child.kill() ? 'stop_requested' : 'unconfirmed';
+                } else this.stopOutcome = child.kill() ? 'stop_requested' : 'unconfirmed';
+            } else this.stopOutcome = child.pid ? 'already_exited' : 'not_started';
+        }
+        return this.stopOutcome;
     }
 }

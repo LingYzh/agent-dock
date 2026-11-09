@@ -131,6 +131,7 @@ html,
 body {
     height: 100%;
     margin: 0;
+    overflow: hidden;
 }
 body {
     background: var(--bg);
@@ -231,6 +232,8 @@ h1 {
     min-height: 0;
     display: grid;
     grid-template-columns: 216px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
 }
 .sidebar {
     background: var(--rail);
@@ -276,8 +279,11 @@ nav {
     overflow: auto;
     flex: 1;
     min-height: 0;
+    overscroll-behavior: contain;
 }
 .agent-row {
+    /* Keep the absolutely positioned accessible status inside the scroll list. */
+    position: relative;
     display: grid;
     grid-template-columns: 8px minmax(0, 1fr);
     gap: 8px;
@@ -431,6 +437,54 @@ h2 {
     overflow: auto;
     padding: 20px;
     scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+}
+.conversation {
+    overflow-anchor: none;
+}
+.timeline-window {
+    position: relative;
+    overflow: clip;
+}
+.timeline-row {
+    position: absolute;
+    inset-inline: 0;
+    display: flow-root;
+    min-height: 1px;
+}
+.detail-paging {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 11px;
+}
+.detail-page-status {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+.setup-worktree {
+    font-size: 12px;
+}
+#setup-worktree-fields {
+    display: grid;
+    gap: 6px;
+    margin-top: 8px;
+}
+#setup-repo {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+.history-control {
+    display: flex;
+    justify-content: center;
+    margin: 0 0 16px;
+    font-size: 12px;
+    color: var(--muted);
 }
 .message {
     margin-bottom: 16px;
@@ -879,6 +933,7 @@ textarea:focus {
     font-size: 12px;
 }
 .closed-hint {
+    flex-shrink: 0;
     margin: 0;
     padding: 12px 20px;
     font-size: 11px;
@@ -1272,7 +1327,7 @@ textarea:focus {
         grid-template-rows: auto minmax(0, 1fr);
     }
     .sidebar {
-        max-height: 200px;
+        max-height: min(200px, 38dvh);
         border-right: 0;
         border-bottom: 1px solid var(--line);
         padding: 8px 10px;

@@ -5,6 +5,7 @@ export function projectEvents(events, state) {
     const tools = new Map();
     let assistant;
     let thought;
+    let turnStartLoaded = !state?.startCursor;
     let turnHasThought = false;
     for (const event of events || []) {
         const update = event.params?.update;
@@ -12,8 +13,9 @@ export function projectEvents(events, state) {
             if (thought) thought.streaming = false;
             assistant = undefined;
             thought = undefined;
+            turnStartLoaded = true;
             turnHasThought = false;
-            items.push({ type: 'user', text: event.params.text, at: event.at });
+            items.push({ type: 'user', id: `user-${event.seq ?? items.length}`, text: event.params.text, at: event.at });
         } else if (update?.sessionUpdate === 'agent_thought_chunk') {
             assistant = undefined;
             if (!thought) {
@@ -26,7 +28,7 @@ export function projectEvents(events, state) {
             if (thought) thought.streaming = false;
             thought = undefined;
             if (!assistant) {
-                assistant = { type: 'assistant', text: '', at: event.at };
+                assistant = { type: 'assistant', id: `assistant-${event.seq ?? items.length}`, text: '', at: event.at };
                 items.push(assistant);
             }
             assistant.text += update.content?.text || '';
@@ -42,31 +44,31 @@ export function projectEvents(events, state) {
             }
             Object.assign(item, update);
         } else if (event.method === 'session/request_permission') {
-            items.push({ type: 'notice', text: '代理请求操作权限。审批结果会记录在此处。', at: event.at });
+            items.push({ type: 'notice', id: `notice-${event.seq ?? items.length}`, text: '代理请求操作权限。审批结果会记录在此处。', at: event.at });
         } else if (event.method === 'bridge/permission_resolved') {
             const kind = event.params.optionKind;
-            items.push({ type: 'notice', text: event.params.outcome?.outcome === 'cancelled' ? '权限请求已取消。' : kind?.startsWith('allow') ? '已允许此操作。' : kind?.startsWith('reject') ? '已拒绝此操作。' : '已提交权限决定。', at: event.at });
+            items.push({ type: 'notice', id: `notice-${event.seq ?? items.length}`, text: event.params.outcome?.outcome === 'cancelled' ? '权限请求已取消。' : kind?.startsWith('allow') ? '已允许此操作。' : kind?.startsWith('reject') ? '已拒绝此操作。' : '已提交权限决定。', at: event.at });
         } else if (event.method === 'bridge/recovered') {
             assistant = undefined;
             if (thought) thought.streaming = false;
             thought = undefined;
             // Routine reconnects are transient UI messages, not conversation turns.
             // Keep recovery exceptions visible because they affect task continuity.
-            if (event.params.recreated || event.params.interrupted) items.push({ type: 'notice', text: event.params.recreated ? '空会话未被 Agent 保存，已按原配置重新建立；未发送任务。' : '会话已恢复；重启前未结束的任务和审批已中断，不会自动重发。', at: event.at });
+            if (event.params.recreated || event.params.interrupted) items.push({ type: 'notice', id: `notice-${event.seq ?? items.length}`, text: event.params.recreated ? '空会话未被 Agent 保存，已按原配置重新建立；未发送任务。' : '会话已恢复；重启前未结束的任务和审批已中断，不会自动重发。', at: event.at });
         } else if (event.method === 'bridge/error') {
             if (thought) thought.streaming = false;
             thought = undefined;
             assistant = undefined;
-            items.push({ type: 'error', text: event.params.message, at: event.at });
+            items.push({ type: 'error', id: `error-${event.seq ?? items.length}`, text: event.params.message, at: event.at });
         } else if (event.method === 'bridge/turn_end') {
             assistant = undefined;
             if (thought) thought.streaming = false;
             thought = undefined;
             // Token accounting is not a thought transcript: report absence rather than fabricate it.
-            if (!turnHasThought && event.params.usage?.thoughtTokens > 0) {
+            if (turnStartLoaded && !turnHasThought && event.params.usage?.thoughtTokens > 0) {
                 items.push({ type: 'thought', id: `thought-unavailable-${event.seq}`, text: '', unavailable: true, tokens: event.params.usage.thoughtTokens, at: event.at });
             }
-            items.push({ type: 'end', text: event.params.stopReason === 'cancelled' ? '任务已取消' : '本轮执行结束', usage: event.params.usage, at: event.at });
+            items.push({ type: 'end', id: `end-${event.seq ?? items.length}`, text: event.params.stopReason === 'cancelled' ? '任务已取消' : '本轮执行结束', usage: event.params.usage, at: event.at });
         }
     }
     // A page boundary can cut through an old thought before its terminal event.
@@ -114,6 +116,11 @@ export function toolOutput(item) {
         if (content.type === 'diff') return `${content.path}\n修改前：\n${content.oldText ?? '（新建文件）'}\n修改后：\n${content.newText ?? ''}`;
         return content.content?.text || content.text || '';
     }).filter(Boolean).join('\n');
+}
+
+export function toolPreview(item) {
+    if (item.panelRawOutput?.text) return item.panelRawOutput;
+    return item.panelContent ?? { text: toolOutput(item) };
 }
 
 export { usageSummary } from './usage.mjs';

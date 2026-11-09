@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, truncateSync } from 'node:fs';
 import path from 'node:path';
 
 export function applySessionEvent(agent, event) {
@@ -7,6 +7,7 @@ export function applySessionEvent(agent, event) {
     if (update?.sessionUpdate === 'config_option_update') agent.configOptions = update.configOptions;
     if (update?.sessionUpdate === 'available_commands_update') agent.availableCommands = update.availableCommands;
     if (update?.sessionUpdate === 'usage_update') agent.contextUsage = update;
+    if (['bridge/closed', 'bridge/archive_cleanup'].includes(event.method) && event.params?.archive) agent.archive = event.params.archive;
     agent.events.push(event);
 }
 
@@ -41,10 +42,12 @@ export class SessionStore {
 
     load() {
         return readdirSync(this.directory).filter((file) => file.endsWith('.jsonl')).map((file) => {
-            const text = readFileSync(path.join(this.directory, file), 'utf8');
+            const journal = path.join(this.directory, file);
+            const bytes = readFileSync(journal);
             // A killed writer may leave an unterminated final record. Do not accept it,
             // nor silently skip corruption in an earlier committed record.
-            const lines = text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter(Boolean);
+            const end = bytes.lastIndexOf(10) + 1;
+            const lines = bytes.subarray(0, end).toString('utf8').split('\n').filter(Boolean);
             let agent;
             for (const line of lines) {
                 const row = JSON.parse(line);
@@ -57,7 +60,9 @@ export class SessionStore {
             }
             if (!agent || path.basename(this.file(agent.id)) !== file) throw new Error(`Invalid session checkpoint: ${file}`);
             delete agent.pendingPermissions;
-            this.checkpoint(agent);
+            // Repair only an incomplete tail. Rewriting every full transcript
+            // before the bridge starts listening penalizes large archives.
+            if (end !== bytes.length) truncateSync(journal, end);
             return agent;
         });
     }

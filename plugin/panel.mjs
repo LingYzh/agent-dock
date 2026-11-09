@@ -1,17 +1,20 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import { projectEvents, groupConsecutiveTools, thoughtOpenState, toolOutput, states, usageSummary, recoveryMessage } from './panel-view.mjs';
+import { projectEvents, groupConsecutiveTools, thoughtOpenState, toolPreview, states, usageSummary, recoveryMessage } from './panel-view.mjs';
 import { renderMarkdown } from './markdown.mjs';
 import { linkTarget } from './link-target.mjs';
 import { tokenComposition, cacheHitRate } from './usage.mjs';
-import { panelSyncArgs, mergePanelState, pollDelay } from './panel-state.mjs';
+import { panelSyncArgs, mergePanelState, prependPanelHistory, pollDelay } from './panel-state.mjs';
 import { createIcons, ArrowUp, Check, ChevronDown, Plus, RefreshCw, Pencil, Terminal, FileSearch, CircleCheck, X } from 'lucide';
 import { createSessionSetup } from './session-setup.mjs';
+import { createTimelineWindow } from './timeline-window.mjs';
 
 // Import only used control icons; the header uses the original Agent Dock brand asset.
 createIcons({ icons: { ArrowUp, Check, ChevronDown, Plus, RefreshCw, CircleCheck, X }, attrs: { class: 'ui-icon', width: 16, height: 16, 'stroke-width': 1.75, 'aria-hidden': 'true', focusable: 'false' } });
 
 const embedded = window.parent !== window;
-const app = embedded ? new App({ name: 'agent-dock-panel', version: '1.0.0' }, {}) : null;
+// A full-height panel scrolls internally. Measuring its intrinsic document height
+// during history changes can grow the host iframe and add a second scrollbar.
+const app = embedded ? new App({ name: 'agent-dock-panel', version: '1.0.0' }, {}, { autoResize: false }) : null;
 const token = location.hash.slice(1) || sessionStorage.getItem('probe-token');
 if (token && !embedded) {
     sessionStorage.setItem('probe-token', token);
@@ -32,10 +35,18 @@ let listRevision;
 let pollTimer;
 let failures = 0;
 let pageActive = true;
+let connectionReady = !app;
+let loadingHistory = false;
+let inlineSize;
 const viewKeys = {};
+const listScroll = { current: 0, archive: 0 };
 let usageState;
 let messageTimer;
 let recoveryNoticeAfter;
+let timeline;
+let timelineAgent;
+const disclosures = new Map();
+const detailPages = new Map();
 
 function dismissMessage() {
     clearTimeout(messageTimer);
@@ -117,26 +128,79 @@ function lazyDetails(details, renderBody) {
 function renderTimelineIcons(root) {
     createIcons({ icons: { ChevronDown, Pencil, Terminal, FileSearch }, root, attrs: { class: 'ui-icon', width: 16, height: 16, 'aria-hidden': 'true', focusable: 'false' } });
 }
-function renderTool(item, expanded) {
+function renderPagedText(id, ref, preview = '') {
+    const key = `${id}:${ref.seq}:${ref.source}`;
+    let entry = detailPages.get(key);
+    if (!entry) {
+        entry = { offsets: [0], index: 0 };
+        if (detailPages.size >= 12) detailPages.delete(detailPages.keys().next().value);
+        detailPages.set(key, entry);
+    }
+    const wrapper = element('div', 'paged-detail');
+    const content = element('pre', '', preview);
+    const controls = element('div', 'detail-paging');
+    const previous = element('button', 'secondary', '上一段');
+    const next = element('button', 'secondary', '下一段');
+    const retry = element('button', 'secondary', '重试');
+    const status = element('span', 'detail-page-status');
+    status.setAttribute('role', 'status');
+    controls.append(previous, status, next, retry);
+    wrapper.append(content, controls);
+    function draw() {
+        const page = entry.page;
+        if (page) content.textContent = page.text;
+        status.textContent = entry.pending ? '正在读取原文…' : entry.error || (page ? `第 ${entry.index + 1} 段 · ${(page.offset + page.text.length).toLocaleString()} / ${page.length.toLocaleString()} 字符` : '');
+        previous.disabled = Boolean(entry.pending) || entry.index === 0;
+        next.disabled = Boolean(entry.pending) || page?.next == null;
+        retry.hidden = !entry.error;
+    }
+    function load(offset, index) {
+        if (!entry.pending) {
+            entry.error = '';
+            entry.retry = { offset, index };
+            entry.pending = invoke('panel_detail', { id, seq: ref.seq, source: ref.source, offset }).then((page) => {
+                entry.page = page;
+                entry.index = index;
+                entry.offsets[index] = offset;
+            }).catch((error) => { entry.error = error.message; }).finally(() => { entry.pending = undefined; });
+        }
+        draw();
+        void entry.pending.then(draw);
+    }
+    previous.onclick = () => load(entry.offsets[entry.index - 1], entry.index - 1);
+    next.onclick = () => load(entry.page.next, entry.index + 1);
+    retry.onclick = () => load(entry.retry.offset, entry.retry.index);
+    if (!entry.page && !entry.error) load(0, 0);
+    else {
+        draw();
+        if (entry.pending) void entry.pending.then(draw);
+    }
+    return wrapper;
+}
+function renderTool(item, id) {
     const details = element('details', 'tool');
     details.dataset.id = item.id;
     details.dataset.status = item.status;
-    details.open = expanded.has(item.id);
+    details.open = disclosures.get(item.id)?.open === true;
     const editing = ['edit', 'delete', 'move'].includes(item.kind);
     const verb = editing ? '编辑' : item.kind === 'read' || item.kind === 'search' ? '读取' : '运行';
     const status = item.status === 'completed' ? `已${verb}` : item.status === 'failed' ? `${verb}失败` : `正在${verb}`;
     details.append(disclosureSummary(`${status} ${item.title || item.name || '工具调用'}`, editing ? 'pencil' : verb === '读取' ? 'file-search' : 'terminal'));
     return lazyDetails(details, function toolBody() {
-        return element('pre', '', toolOutput(item) || (item.status === 'completed' ? '已完成，未返回文本输出' : item.status === 'failed' ? '工具执行失败，未返回文本输出' : '等待工具输出…'));
+        const output = toolPreview(item);
+        if (output.ref) return renderPagedText(id, output.ref, output.text);
+        return element('pre', '', output.text || (item.status === 'completed' ? '已完成，未返回文本输出' : item.status === 'failed' ? '工具执行失败，未返回文本输出' : '等待工具输出…'));
     });
 }
 async function invoke(name, args = {}) {
+    const panelRead = ['panel_sync', 'panel_detail'].includes(name);
     if (app) {
-        const result = await app.callServerTool({ name, arguments: args }, name === 'panel_sync' ? { timeout: 15000 } : undefined);
+        if (!connectionReady) throw new Error('面板尚未连接');
+        const result = await app.callServerTool({ name, arguments: args }, panelRead ? { timeout: 15000 } : undefined);
         if (result.isError) throw new Error(result.content?.[0]?.text || '工具调用失败');
         return result.structuredContent || JSON.parse(result.content[0].text);
     }
-    const response = await fetch('/tool', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }), signal: name === 'panel_sync' ? AbortSignal.timeout(15000) : undefined });
+    const response = await fetch('/tool', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }), signal: panelRead ? AbortSignal.timeout(15000) : undefined });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '连接失败');
     return result;
@@ -152,6 +216,7 @@ function renderList() {
     // Preserve focused controls and avoid replacing identical rows every poll.
     const key = JSON.stringify(matches.map((agent) => [agent.id, agent.name, agent.status, selected === agent.id]));
     if (nav.dataset.key === key) return;
+    const scrollTop = nav.scrollTop;
     nav.dataset.key = key;
     nav.replaceChildren();
     for (const agent of matches) {
@@ -170,6 +235,7 @@ function renderList() {
             selected = agent.id;
             state = undefined;
             dismissMessage();
+            clearDetail();
             document.querySelector('#permissions').hidden = true;
             updateComposer();
             generation++;
@@ -183,70 +249,169 @@ function renderList() {
         nav.append(button);
     }
     if (!matches.length) nav.append(element('p', 'empty-list', agents.length ? '没有匹配的会话' : '尚无子代理'));
+    nav.scrollTop = scrollTop;
 }
-function renderConversation(agent) {
-    const container = document.querySelector('#conversation');
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 70;
-    const scroll = container.scrollTop;
-    const expanded = new Set([...container.querySelectorAll('details[open]')].map((node) => node.dataset.id));
-    const previousThoughts = new Map([...container.querySelectorAll('details.thought')].map((node) => [node.dataset.id, { open: node.open, streaming: node.dataset.streaming === 'true' }]));
-    const items = groupConsecutiveTools(projectEvents(agent.events, agent));
-    container.replaceChildren();
-    for (const item of items) {
-        if (item.type === 'thought') {
-            const details = element('details', 'thought');
-            details.dataset.id = item.id;
-            details.open = thoughtOpenState(item.streaming, previousThoughts.get(item.id));
-            details.dataset.streaming = String(Boolean(item.streaming));
-            const label = item.unavailable ? `思考 · ${item.tokens} tokens · 上游未返回片段` : item.streaming ? '思考中' : '思考过程';
-            details.append(disclosureSummary(label));
-            container.append(lazyDetails(details, function thoughtBody() {
-                return markdownBody('thought-body', item.unavailable ? '代理返回了思考 token 用量，但本轮 ACP 事件中没有思考文本。这里仅展示上游实际返回的内容。' : item.text);
-            }));
-        } else if (item.type === 'tool') {
-            container.append(renderTool(item, expanded));
-        } else if (item.type === 'tool-group') {
-            const details = element('details', 'tool-group');
-            details.dataset.id = item.id;
-            details.open = expanded.has(item.id);
-            const completed = item.children.filter((tool) => tool.status === 'completed').length;
-            const failed = item.children.filter((tool) => tool.status === 'failed').length;
-            const running = item.children.length - completed - failed;
-            const counts = [`工具调用 · ${item.children.length} 项`, running && `${running} 执行中`, failed && `${failed} 失败`, completed && `${completed} 已完成`].filter(Boolean);
-            details.dataset.status = failed ? 'failed' : running ? 'in_progress' : 'completed';
-            details.append(disclosureSummary(counts.join(' · '), item.children.some((tool) => tool.kind === 'edit') ? 'pencil' : 'terminal'));
-            container.append(lazyDetails(details, function groupBody() {
-                const children = element('div', 'tool-group-items');
-                for (const tool of item.children) children.append(renderTool(tool, expanded));
-                return children;
-            }));
-        } else if (item.type === 'end') {
-            const usage = item.usage?.totalTokens ? ` · ${item.usage.totalTokens.toLocaleString()} tokens` : '';
-            container.append(element('div', 'turn-end', item.text + usage));
-        } else {
-            const message = element('div', `message ${item.type}`);
-            message.append(element('div', 'message-label', item.type === 'user' ? '任务指令' : item.type === 'assistant' ? '子代理' : '执行提示'), ['user', 'assistant'].includes(item.type) ? markdownBody('message-body', item.text) : element('div', 'message-body', item.text));
-            container.append(message);
+function clearDetail() {
+    timeline?.dispose();
+    timeline = undefined;
+    timelineAgent = undefined;
+    disclosures.clear();
+    detailPages.clear();
+    document.querySelector('#agent-title').textContent = '正在加载会话…';
+    document.querySelector('#agent-meta').textContent = '';
+    document.querySelector('#agent-state').hidden = true;
+    document.querySelector('#permissions').hidden = true;
+    for (const id of ['conversation', 'usage', 'diagnostics', 'usage-strip']) document.getElementById(id).replaceChildren();
+    for (const view of Object.keys(viewKeys)) delete viewKeys[view];
+}
+function renderHistoryControl(older) {
+    const control = element('div', 'history-control');
+    const button = element('button', 'secondary', loadingHistory ? '正在加载…' : older ? '加载更早的记录' : '加载后续记录');
+    button.disabled = loadingHistory;
+    button.onclick = loadHistory;
+    control.append(button);
+    return control;
+}
+function renderConversationRow(item, id) {
+    let row;
+    if (item.type === 'thought') {
+        const details = element('details', 'thought');
+        details.dataset.id = item.id;
+        details.open = thoughtOpenState(item.streaming, disclosures.get(item.id));
+        details.dataset.streaming = String(Boolean(item.streaming));
+        const label = item.unavailable ? `思考 · ${item.tokens} tokens · 上游未返回片段` : item.streaming ? '思考中' : '思考过程';
+        details.append(disclosureSummary(label));
+        row = lazyDetails(details, function thoughtBody() {
+            return markdownBody('thought-body', item.unavailable ? '代理返回了思考 token 用量，但本轮 ACP 事件中没有思考文本。这里仅展示上游实际返回的内容。' : item.text);
+        });
+    } else if (item.type === 'tool') {
+        row = renderTool(item, id);
+    } else if (item.type === 'tool-group') {
+        const details = element('details', 'tool-group');
+        details.dataset.id = item.id;
+        details.open = disclosures.get(item.id)?.open === true;
+        const completed = item.children.filter((tool) => tool.status === 'completed').length;
+        const failed = item.children.filter((tool) => tool.status === 'failed').length;
+        const running = item.children.length - completed - failed;
+        const counts = [`工具调用 · ${item.children.length} 项`, running && `${running} 执行中`, failed && `${failed} 失败`, completed && `${completed} 已完成`].filter(Boolean);
+        details.dataset.status = failed ? 'failed' : running ? 'in_progress' : 'completed';
+        details.append(disclosureSummary(counts.join(' · '), item.children.some((tool) => tool.kind === 'edit') ? 'pencil' : 'terminal'));
+        row = lazyDetails(details, function groupBody() {
+            const children = element('div', 'tool-group-items');
+            for (const tool of item.children) children.append(renderTool(tool, id));
+            return children;
+        });
+    } else if (item.type === 'end') {
+        const usage = item.usage?.totalTokens ? ` · ${item.usage.totalTokens.toLocaleString()} tokens` : '';
+        row = element('div', 'turn-end', item.text + usage);
+    } else if (item.type === 'history') {
+        row = renderHistoryControl(item.older);
+    } else if (item.type === 'empty') {
+        row = element('div', 'empty');
+        row.append(element('strong', '', item.closed ? '会话已关闭' : '子代理已就绪'), element('span', '', item.closed ? '此会话没有对话记录。' : '在下方发送任务，执行进度会显示在这里。'));
+    } else {
+        const message = element('div', `message ${item.type}`);
+        message.append(element('div', 'message-label', item.type === 'user' ? '任务指令' : item.type === 'assistant' ? '子代理' : '执行提示'), ['user', 'assistant'].includes(item.type) ? markdownBody('message-body', item.text) : element('div', 'message-body', item.text));
+        row = message;
+    }
+    const wrapper = element('div');
+    wrapper.append(row);
+    renderTimelineIcons(wrapper);
+    return wrapper;
+}
+function rememberDisclosures(row) {
+    for (const node of row.querySelectorAll('details[data-id]')) {
+        disclosures.set(node.dataset.id, { open: node.open, streaming: node.dataset.streaming === 'true' });
+    }
+}
+function renderConversation(agent, prepending = false) {
+    if (!timeline || timelineAgent !== agent.id) {
+        timeline?.dispose();
+        timelineAgent = agent.id;
+        const id = agent.id;
+        timeline = createTimelineWindow(document.querySelector('#conversation'), (row) => renderConversationRow(row, id), rememberDisclosures);
+    }
+    const items = groupConsecutiveTools(projectEvents(agent.events, agent)).map((item, index) => ({ ...item, key: `${item.type}:${item.id ?? index}` }));
+    if (!items.length) items.push({ type: 'empty', key: 'empty', closed: agent.status === 'closed' });
+    if (agent.startCursor > 0) items.unshift({ type: 'history', key: 'history', older: true });
+    else if (agent.startCursor === undefined && agent.hasMore) items.push({ type: 'history', key: 'history', older: false });
+    timeline.update(items, prepending);
+}
+async function loadHistory() {
+    if (loadingHistory || !state) return;
+    const { id, startCursor } = state;
+    const version = generation;
+    loadingHistory = true;
+    const button = document.querySelector('.history-control button');
+    if (button) { button.disabled = true; button.textContent = '正在加载…'; }
+    try {
+        if (startCursor === undefined) {
+            await refresh(true);
+            return;
         }
+        const result = await invoke('panel_sync', { id, before: startCursor, recent: true, compact: true, revision: listRevision });
+        if (generation !== version || selected !== id) return;
+        const merged = prependPanelHistory(state, result.agent);
+        if (merged === state) throw new Error('未能加载更早的记录，请刷新后重试');
+        state = merged;
+        rendered = detailKey(state);
+        loadingHistory = false;
+        if (document.querySelector('#error').dataset.scope === 'history') showError();
+        renderActiveView(true);
+    } catch (error) {
+        if (generation === version && selected === id) showError(error.message, 'history');
+    } finally {
+        loadingHistory = false;
+        const current = document.querySelector('.history-control button');
+        if (current) { current.disabled = false; current.textContent = state?.startCursor > 0 ? '加载更早的记录' : '加载后续记录'; }
     }
-    if (!items.length) {
-        const empty = element('div', 'empty');
-        empty.append(element('strong', '', agent.status === 'closed' ? '会话已关闭' : '子代理已就绪'), element('span', '', agent.status === 'closed' ? '此会话没有对话记录。' : '在下方发送任务，执行进度会显示在这里。'));
-        container.append(empty);
-    }
-    renderTimelineIcons(container);
-    container.scrollTop = nearBottom ? container.scrollHeight : scroll;
 }
 function renderDiagnostics(agent) {
     const container = document.querySelector('#diagnostics');
     container.replaceChildren();
     const list = element('dl');
-    for (const [name, value] of [['会话', agent.sessionId || '—'], ['工作目录', agent.cwd], ['连接方式', app ? 'MCP App' : '内置浏览器'], ['协议', `ACP ${agent.info?.protocolVersion || '—'}`], ['事件数量', agent.cursor]]) {
+    const fields = [['会话', agent.sessionId || '—'], ['工作目录', agent.cwd], ['连接方式', app ? 'MCP App' : '内置浏览器'], ['协议', `ACP ${agent.info?.protocolVersion || '—'}`], ['已加载事件', `${agent.events.length} / ${agent.sourceCursor}`]];
+    if (agent.worktree) fields.push(['Git 分支', agent.worktree.branch], ['源仓库', agent.worktree.repo]);
+    if (agent.archive) {
+        const { storageMs, cleanup, acp, process, cleanupMs, diagnosticsSaved } = agent.archive;
+        const rpcLabels = { closed: '已确认关闭', already_closed: '会话已关闭', timeout: '等待超时', unsupported: '未实现关闭请求', failed: '返回错误', skipped: '未发送' };
+        const processLabels = { tree_stopped: '已回收进程树', shared_kept: '其他会话仍在使用', stop_requested: '已请求停止', already_exited: '进程已退出', not_started: '无待回收进程', unconfirmed: '未能确认', failed: '回收失败' };
+        fields.push(['归档 · 本地保存', storageMs === undefined ? '已写入' : `已写入 · ${storageMs} ms`]);
+        if (cleanup === 'pending') fields.push(['归档 · 清理', '尚未记录完成']);
+        else {
+            fields.push(['归档 · ACP 关闭', [rpcLabels[acp?.state] || '—', acp?.code, acp?.ms === undefined ? null : `${acp.ms} ms`].filter((part) => part != null).join(' · ')]);
+            fields.push(['归档 · 进程', `${processLabels[process] || '—'} · ${cleanupMs} ms`]);
+            if (diagnosticsSaved === false) fields.push(['归档 · 诊断', '本次结果未能写入磁盘']);
+        }
+    }
+    for (const [name, value] of fields) {
         list.append(element('dt', '', name), element('dd', '', String(value)));
     }
     const details = element('details');
     details.append(element('summary', '', '原始事件'));
-    container.append(list, lazyDetails(details, function diagnosticBody() { return element('pre', '', JSON.stringify(agent.events, null, 4)); }));
+    container.append(list, lazyDetails(details, function diagnosticBody() {
+        const reader = element('div', 'event-reader');
+        if (!agent.events.length) return element('p', 'usage-note', '没有已加载的事件');
+        const controls = element('div', 'detail-paging');
+        const older = element('button', 'secondary', '上一条事件');
+        const newer = element('button', 'secondary', '下一条事件');
+        const label = element('span', 'detail-page-status');
+        const body = element('div');
+        let index = agent.events.length - 1;
+        function display() {
+            const event = agent.events[index];
+            label.textContent = `#${event.seq} · ${event.method}`;
+            older.disabled = index === 0;
+            newer.disabled = index === agent.events.length - 1;
+            body.replaceChildren(agent.detailAvailable ? renderPagedText(agent.id, { seq: event.seq, source: 'event' }) : element('pre', '', JSON.stringify(event, null, 4)));
+        }
+        older.onclick = () => { index--; display(); };
+        newer.onclick = () => { index++; display(); };
+        controls.append(older, label, newer);
+        reader.append(controls, body);
+        display();
+        return reader;
+    }));
 }
 function renderPermissions(agent) {
     const container = document.querySelector('#permissions');
@@ -319,7 +484,7 @@ function updateComposer() {
     document.querySelector('#send').disabled = !ready || !document.querySelector('#prompt').value.trim();
     document.querySelector('#cancel').hidden = !['running', 'blocked'].includes(state?.status);
     document.querySelector('#cancel').disabled = actionPending;
-    document.querySelector('#create').disabled = actionPending;
+    document.querySelector('#create').disabled = actionPending || !connectionReady;
     document.querySelector('#archive').disabled = !state || !['idle', 'completed', 'cancelled', 'error'].includes(state.status) || actionPending;
     document.querySelector('#archive').hidden = state?.status === 'closed';
     for (const button of document.querySelectorAll('#permissions button')) button.disabled = actionPending;
@@ -478,14 +643,17 @@ function sendCommand(id, command) {
         document.querySelector('[data-view="usage"]').click();
     });
 }
-async function refresh() {
+function detailKey(agent) {
+    return `${agent.id}:${agent.startCursor}:${agent.cursor}:${agent.status}`;
+}
+async function refresh(loadLegacyHistory = false) {
     clearTimeout(pollTimer);
-    if (!pageActive || document.hidden) return;
+    if (!connectionReady || !pageActive || document.hidden) return;
     if (refreshing) { pendingRefresh = true; return; }
     refreshing = true;
     const version = generation;
     try {
-        const result = await invoke('panel_sync', panelSyncArgs(state, selected, listRevision));
+        const result = await invoke('panel_sync', panelSyncArgs(state, selected, listRevision, loadLegacyHistory === true));
         if (generation !== version) { pendingRefresh = true; return; }
         if (result.agents) agents = result.agents;
         listRevision = result.revision;
@@ -495,6 +663,7 @@ async function refresh() {
             selected = visible[0]?.id;
             state = undefined;
             rendered = '';
+            clearDetail();
             document.querySelector('#prompt').value = '';
             previewing = false;
             updatePreview();
@@ -517,7 +686,7 @@ async function refresh() {
                 recoveryNoticeAfter = Math.max(recoveryNoticeAfter, agent.cursor);
             }
             state = agent;
-            const key = `${agent.id}:${agent.cursor}:${agent.status}`;
+            const key = detailKey(agent);
             if (rendered !== key) {
                 document.querySelector('#agent-title').textContent = agent.name;
                 const effort = agent.configOptions?.find((item) => item.category === 'thought_level' || ['effort', 'thought_level'].includes(item.id));
@@ -528,7 +697,7 @@ async function refresh() {
                 badge.title = states[agent.status] || agent.status;
                 badge.setAttribute('aria-label', badge.title);
                 badge.dataset.status = agent.status;
-                usageState = usageSummary(agent);
+                usageState = agent.usage ?? usageSummary(agent);
                 const session = usageState.session;
                 document.querySelector('#usage-strip').replaceChildren(element('span', '', Number.isFinite(session.totalTokens) ? `累计 ${session.approximate ? '约 ' : ''}${tokenText(session.totalTokens)} tokens` : '累计用量未返回'), element('span', '', usageState.context ? `上下文 ${(usageState.context.used / usageState.context.size * 100).toFixed(1)}%` : '上下文未返回'));
                 // Hidden tabs retain no heavy transcript/JSON DOM from another session.
@@ -567,16 +736,16 @@ async function refresh() {
         else scheduleRefresh();
     }
 }
-function renderActiveView() {
+function renderActiveView(prepending = false) {
     if (!state || viewKeys[currentView] === rendered) return;
-    if (currentView === 'conversation') renderConversation(state);
+    if (currentView === 'conversation') renderConversation(state, prepending);
     else if (currentView === 'usage') renderUsage(state);
     else renderDiagnostics(state);
     viewKeys[currentView] = rendered;
 }
 function scheduleRefresh() {
     clearTimeout(pollTimer);
-    const delay = pollDelay({ hidden: document.hidden || !pageActive, hasMore: state?.hasMore, active: agents.some((agent) => ['starting', 'configuring', 'running', 'blocked', 'cancelling'].includes(agent.status)), failures });
+    const delay = pollDelay({ hidden: document.hidden || !pageActive, catchingUp: state?.startCursor !== undefined && state.hasMore, active: agents.some((agent) => ['starting', 'configuring', 'running', 'blocked', 'cancelling'].includes(agent.status)), failures });
     if (delay !== null) pollTimer = setTimeout(refresh, delay);
 }
 document.addEventListener('visibilitychange', function visibilityChanged() {
@@ -615,10 +784,14 @@ document.querySelector('#prompt').onkeydown = function submitShortcut(event) {
     }
 };
 for (const button of document.querySelectorAll('[data-filter]')) button.onclick = function changeFilter() {
+    if (filter === button.dataset.filter) return;
+    const nav = document.querySelector('#agents');
+    listScroll[filter] = nav.scrollTop;
     dismissMessage();
     filter = button.dataset.filter;
     selected = undefined;
     state = undefined;
+    clearDetail();
     generation++;
     rendered = '';
     document.querySelector('#prompt').value = '';
@@ -626,16 +799,17 @@ for (const button of document.querySelectorAll('[data-filter]')) button.onclick 
     updatePreview();
     for (const item of document.querySelectorAll('[data-filter]')) item.setAttribute('aria-pressed', String(item === button));
     renderList();
+    nav.scrollTop = listScroll[filter];
     updateComposer();
     void refresh();
 };
 for (const button of document.querySelectorAll('[data-view]')) button.onclick = function changeView() {
     currentView = button.dataset.view;
-    renderActiveView();
     for (const item of document.querySelectorAll('[data-view]')) item.setAttribute('aria-pressed', String(item === button));
     document.querySelector('#conversation').hidden = button.dataset.view !== 'conversation';
     document.querySelector('#diagnostics').hidden = button.dataset.view !== 'diagnostics';
     document.querySelector('#usage').hidden = button.dataset.view !== 'usage';
+    renderActiveView();
     updateComposer();
 };
 const sessionSetup = createSessionSetup(invoke);
@@ -648,6 +822,7 @@ document.querySelector('#create').onclick = function createAgent() {
         for (const item of document.querySelectorAll('[data-filter]')) item.setAttribute('aria-pressed', String(item.dataset.filter === filter));
         selected = agent.id;
         state = undefined;
+        clearDetail();
         generation++;
         rendered = '';
         document.querySelector('#prompt').value = '';
@@ -674,11 +849,26 @@ document.querySelector('#composer').onsubmit = function sendPrompt(event) {
     });
 };
 if (app) {
-    app.onhostcontextchanged = function updateTheme(context) {
+    function updateHostContext(context) {
         if (context.theme) document.documentElement.dataset.theme = context.theme;
+        // Inline embeds need an initial height; full panels get it from the host.
+        if (context.displayMode === 'inline') {
+            const dimensions = context.containerDimensions;
+            const height = dimensions?.height ?? Math.min(640, dimensions?.maxHeight ?? 640);
+            const width = dimensions?.width ?? window.innerWidth;
+            const size = `${width}:${height}`;
+            if (size !== inlineSize) {
+                inlineSize = size;
+                void app.sendSizeChanged({ width, height }).catch(() => {});
+            }
+        } else inlineSize = undefined;
+    }
+    app.onhostcontextchanged = function updateContext() {
+        if (connectionReady) updateHostContext(app.getHostContext() || {});
     };
+    updateComposer();
     await app.connect();
-    const context = app.getHostContext();
-    if (context?.theme) document.documentElement.dataset.theme = context.theme;
+    connectionReady = true;
+    updateHostContext(app.getHostContext() || {});
 }
 await refresh();

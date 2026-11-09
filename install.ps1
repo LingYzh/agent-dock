@@ -27,7 +27,7 @@ if (-not $SkipPluginRegistration) {
 & $node $bootstrap --install @options
 if ($LASTEXITCODE -ne 0) { throw 'Runtime preparation failed. Registration was not attempted.' }
 if (-not $SkipPluginRegistration) {
-    & $codex.Source plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.1 --json
+    & $codex.Source plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.2 --json
     if ($LASTEXITCODE -ne 0) { throw 'Git marketplace registration failed. Runtime files are prepared; retry registration after fixing network access.' }
     & $codex.Source plugin add agent-dock@agent-dock --json
     if ($LASTEXITCODE -ne 0) { throw 'Plugin installation failed. Check codex plugin list and retry.' }

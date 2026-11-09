@@ -14,7 +14,9 @@ export const providers = {
     claude: {
         name: 'Claude Code',
         command: process.execPath,
-        args: [path.join(root, 'node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js')]
+        args: [path.join(root, 'node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js')],
+        // The adapter can wait up to five seconds for its cancelled turns to settle.
+        sessionCloseTimeoutMs: 6000
     }
 };
 

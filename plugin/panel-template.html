@@ -51,6 +51,14 @@
             <p id="setup-error" class="setup-error" role="alert" hidden></p>
             <div class="setup-fields"></div>
             <p class="setup-note">选项由 Agent 提供，切换模型后会自动更新。</p>
+            <div class="setup-worktree">
+                <label><input type="checkbox" id="setup-isolate"> 使用独立 Git worktree</label>
+                <div id="setup-worktree-fields" hidden>
+                    <label for="setup-repo">本机 Git 仓库路径</label>
+                    <input id="setup-repo" type="text" placeholder="D:\Projects\my-repo" spellcheck="false" autocomplete="off">
+                    <p class="setup-note">从当前已提交的 HEAD 创建分支。归档后保留目录和分支。</p>
+                </div>
+            </div>
             <div class="setup-actions"><button type="button" id="setup-cancel" class="secondary">取消</button><button type="button" id="setup-confirm" class="primary" disabled>开始使用</button></div>
         </dialog>
         <script type="module">/* PANEL_JS */</script>

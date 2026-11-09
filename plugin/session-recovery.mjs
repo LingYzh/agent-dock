@@ -56,7 +56,7 @@ export async function restoreSession(agent, createClient, record) {
         agent.status = 'error';
         agent.error = `会话恢复失败，历史已保留：${error.message}`;
         agent.recovery.phase = 'failed';
-        agent.client?.stop();
+        await agent.client?.stop();
         record(agent, 'bridge/error', { message: agent.error });
     }
 }
