@@ -3,7 +3,7 @@ import { projectEvents, groupConsecutiveTools, thoughtOpenState, toolPreview, st
 import { renderMarkdown } from './markdown.mjs';
 import { linkTarget } from './link-target.mjs';
 import { tokenComposition, cacheHitRate } from './usage.mjs';
-import { panelSyncArgs, mergePanelState, prependPanelHistory, pollDelay } from './panel-state.mjs';
+import { panelSyncArgs, mergePanelState, prependPanelHistory, pollDelay, createPanelCache } from './panel-state.mjs';
 import { createIcons, ArrowUp, Check, ChevronDown, Plus, RefreshCw, Pencil, Terminal, FileSearch, CircleCheck, X } from 'lucide';
 import { createSessionSetup } from './session-setup.mjs';
 import { createTimelineWindow } from './timeline-window.mjs';
@@ -25,8 +25,10 @@ let agents = [];
 let state;
 let filter = 'current';
 let generation = 0;
-let refreshing = false;
+let refreshing;
 let pendingRefresh = false;
+let selectionSync = true;
+const panelCache = createPanelCache();
 let actionPending = false;
 let rendered = '';
 let previewing = false;
@@ -36,7 +38,7 @@ let pollTimer;
 let failures = 0;
 let pageActive = true;
 let connectionReady = !app;
-let loadingHistory = false;
+let loadingHistory;
 let inlineSize;
 const viewKeys = {};
 const listScroll = { current: 0, archive: 0 };
@@ -192,15 +194,16 @@ function renderTool(item, id) {
         return element('pre', '', output.text || (item.status === 'completed' ? '已完成，未返回文本输出' : item.status === 'failed' ? '工具执行失败，未返回文本输出' : '等待工具输出…'));
     });
 }
-async function invoke(name, args = {}) {
+async function invoke(name, args = {}, signal) {
     const panelRead = ['panel_sync', 'panel_detail'].includes(name);
     if (app) {
         if (!connectionReady) throw new Error('面板尚未连接');
-        const result = await app.callServerTool({ name, arguments: args }, panelRead ? { timeout: 15000 } : undefined);
+        const result = await app.callServerTool({ name, arguments: args }, panelRead ? { timeout: 15000, signal } : undefined);
         if (result.isError) throw new Error(result.content?.[0]?.text || '工具调用失败');
         return result.structuredContent || JSON.parse(result.content[0].text);
     }
-    const response = await fetch('/tool', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }), signal: panelRead ? AbortSignal.timeout(15000) : undefined });
+    const timeout = panelRead ? AbortSignal.timeout(15000) : undefined;
+    const response = await fetch('/tool', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }), signal: signal && timeout ? AbortSignal.any([signal, timeout]) : signal || timeout });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '连接失败');
     return result;
@@ -232,17 +235,7 @@ function renderList() {
         button.append(dot, copy);
         button.onclick = function selectAgent() {
             if (selected === agent.id) return;
-            selected = agent.id;
-            state = undefined;
-            dismissMessage();
-            clearDetail();
-            document.querySelector('#permissions').hidden = true;
-            updateComposer();
-            generation++;
-            rendered = '';
-            document.querySelector('#prompt').value = '';
-            previewing = false;
-            updatePreview();
+            selectSession(agent.id);
             renderList();
             void refresh();
         };
@@ -250,6 +243,26 @@ function renderList() {
     }
     if (!matches.length) nav.append(element('p', 'empty-list', agents.length ? '没有匹配的会话' : '尚无子代理'));
     nav.scrollTop = scrollTop;
+}
+function selectSession(id) {
+    panelCache.remember(state);
+    refreshing?.controller.abort();
+    loadingHistory?.controller.abort();
+    loadingHistory = undefined;
+    pendingRefresh = false;
+    selected = id;
+    generation++;
+    selectionSync = true;
+    state = panelCache.get(id);
+    recoveryNoticeAfter = undefined;
+    dismissMessage();
+    clearDetail();
+    rendered = '';
+    document.querySelector('#prompt').value = '';
+    previewing = false;
+    updatePreview();
+    if (state) renderSelectedAgent();
+    updateComposer();
 }
 function clearDetail() {
     timeline?.dispose();
@@ -341,7 +354,8 @@ async function loadHistory() {
     if (loadingHistory || !state) return;
     const { id, startCursor } = state;
     const version = generation;
-    loadingHistory = true;
+    const request = { controller: new AbortController() };
+    loadingHistory = request;
     const button = document.querySelector('.history-control button');
     if (button) { button.disabled = true; button.textContent = '正在加载…'; }
     try {
@@ -349,19 +363,20 @@ async function loadHistory() {
             await refresh(true);
             return;
         }
-        const result = await invoke('panel_sync', { id, before: startCursor, recent: true, compact: true, revision: listRevision });
+        const result = await invoke('panel_sync', { id, before: startCursor, recent: true, compact: true, revision: listRevision }, request.controller.signal);
         if (generation !== version || selected !== id) return;
         const merged = prependPanelHistory(state, result.agent);
         if (merged === state) throw new Error('未能加载更早的记录，请刷新后重试');
         state = merged;
         rendered = detailKey(state);
-        loadingHistory = false;
+        loadingHistory = undefined;
         if (document.querySelector('#error').dataset.scope === 'history') showError();
         renderActiveView(true);
     } catch (error) {
         if (generation === version && selected === id) showError(error.message, 'history');
     } finally {
-        loadingHistory = false;
+        if (generation !== version || selected !== id || (loadingHistory && loadingHistory !== request)) return;
+        loadingHistory = undefined;
         const current = document.querySelector('.history-control button');
         if (current) { current.disabled = false; current.textContent = state?.startCursor > 0 ? '加载更早的记录' : '加载后续记录'; }
     }
@@ -479,16 +494,16 @@ function renderComposition(segments, label) {
 function updateComposer() {
     document.querySelector('#composer').hidden = state?.status === 'closed' || currentView !== 'conversation';
     document.querySelector('#closed-hint').hidden = state?.status !== 'closed';
-    const ready = state && ['idle', 'completed', 'cancelled'].includes(state.status) && !actionPending;
+    const ready = state && !selectionSync && ['idle', 'completed', 'cancelled'].includes(state.status) && !actionPending;
     document.querySelector('#prompt').disabled = !ready;
     document.querySelector('#send').disabled = !ready || !document.querySelector('#prompt').value.trim();
     document.querySelector('#cancel').hidden = !['running', 'blocked'].includes(state?.status);
-    document.querySelector('#cancel').disabled = actionPending;
+    document.querySelector('#cancel').disabled = actionPending || selectionSync;
     document.querySelector('#create').disabled = actionPending || !connectionReady;
-    document.querySelector('#archive').disabled = !state || !['idle', 'completed', 'cancelled', 'error'].includes(state.status) || actionPending;
+    document.querySelector('#archive').disabled = !state || !['idle', 'completed', 'cancelled', 'error'].includes(state.status) || actionPending || selectionSync;
     document.querySelector('#archive').hidden = state?.status === 'closed';
-    for (const button of document.querySelectorAll('#permissions button')) button.disabled = actionPending;
-    document.querySelector('#composer-hint').textContent = state?.status === 'blocked' ? '等待上方操作审批' : state?.status === 'running' ? '代理正在执行任务' : state?.status === 'closed' ? '会话已关闭，历史记录仍可查看' : ready ? '支持 Markdown · Ctrl+Enter 发送' : '选择一个可用会话';
+    for (const button of document.querySelectorAll('#permissions button')) button.disabled = actionPending || selectionSync;
+    document.querySelector('#composer-hint').textContent = selectionSync && selected ? '正在同步最新状态…' : state?.status === 'blocked' ? '等待上方操作审批' : state?.status === 'running' ? '代理正在执行任务' : state?.status === 'closed' ? '会话已关闭，历史记录仍可查看' : ready ? '支持 Markdown · Ctrl+Enter 发送' : '选择一个可用会话';
     document.querySelector('#preview-toggle').disabled = !ready;
     for (const button of document.querySelectorAll('[data-usage-command]')) button.disabled = !ready || !state?.availableCommands?.some((item) => item.name === button.dataset.usageCommand);
     resizeComposer();
@@ -646,72 +661,79 @@ function sendCommand(id, command) {
 function detailKey(agent) {
     return `${agent.id}:${agent.startCursor}:${agent.cursor}:${agent.status}`;
 }
+function renderSelectedAgent() {
+    const agent = state;
+    const key = detailKey(agent);
+    if (rendered !== key) {
+        document.querySelector('#agent-title').textContent = agent.name;
+        const effort = agent.configOptions?.find((item) => item.category === 'thought_level' || ['effort', 'thought_level'].includes(item.id));
+        document.querySelector('#agent-meta').textContent = `${agent.provider === 'claude' ? 'Claude Code' : 'Antigravity'} · ${modelLabel(agent)}${effort ? ` · 思考 ${effort.currentValue}` : ''}`;
+        const badge = document.querySelector('#agent-state');
+        badge.hidden = false;
+        badge.textContent = '';
+        badge.title = states[agent.status] || agent.status;
+        badge.setAttribute('aria-label', badge.title);
+        badge.dataset.status = agent.status;
+        usageState = agent.usage ?? usageSummary(agent);
+        const session = usageState.session;
+        document.querySelector('#usage-strip').replaceChildren(element('span', '', Number.isFinite(session.totalTokens) ? `累计 ${session.approximate ? '约 ' : ''}${tokenText(session.totalTokens)} tokens` : '累计用量未返回'), element('span', '', usageState.context ? `上下文 ${(usageState.context.used / usageState.context.size * 100).toFixed(1)}%` : '上下文未返回'));
+        // Hidden tabs retain no heavy transcript/JSON DOM from another session.
+        for (const view of ['conversation', 'usage', 'diagnostics']) {
+            if (!viewKeys[view]?.startsWith(`${agent.id}:`)) {
+                document.getElementById(view).replaceChildren();
+                delete viewKeys[view];
+            }
+        }
+        renderPermissions(agent);
+        rendered = key;
+    }
+    renderActiveView();
+    updateComposer();
+}
 async function refresh(loadLegacyHistory = false) {
     clearTimeout(pollTimer);
     if (!connectionReady || !pageActive || document.hidden) return;
-    if (refreshing) { pendingRefresh = true; return; }
-    refreshing = true;
+    if (refreshing?.version === generation && !refreshing.controller.signal.aborted) { pendingRefresh = true; return; }
     const version = generation;
+    const request = { version, controller: new AbortController() };
+    refreshing = request;
     try {
-        const result = await invoke('panel_sync', panelSyncArgs(state, selected, listRevision, loadLegacyHistory === true));
-        if (generation !== version) { pendingRefresh = true; return; }
+        const result = await invoke('panel_sync', panelSyncArgs(state, selected, listRevision, loadLegacyHistory === true, selectionSync), request.controller.signal);
+        if (generation !== version || request.controller.signal.aborted) return;
         if (result.agents) agents = result.agents;
         listRevision = result.revision;
         const visible = agents.filter((agent) => filter === 'archive' ? agent.status === 'closed' : agent.status !== 'closed');
         if (!visible.some((agent) => agent.id === selected)) {
-            dismissMessage();
-            selected = visible[0]?.id;
-            state = undefined;
-            rendered = '';
-            clearDetail();
-            document.querySelector('#prompt').value = '';
-            previewing = false;
-            updatePreview();
+            const next = visible[0]?.id;
+            if (next !== selected) {
+                selectSession(next);
+                pendingRefresh = true;
+            }
         }
         document.querySelector('#count').textContent = visible.length;
         document.querySelector('#connection').textContent = '已连接';
         renderList();
+        if (generation !== version) return;
         if (selected) {
             const id = selected;
-            if (result.agent?.id !== id && !state) { pendingRefresh = true; return; }
+            if (result.agent?.id !== id && (!state || selectionSync)) { pendingRefresh = true; return; }
             const agent = mergePanelState(state, result.agent?.id === id ? result.agent : undefined);
             // A selection change invalidates all in-flight detail responses.
             if (generation !== version || selected !== id) return;
             // Baseline the full source cursor once, so paged history and session
             // switches never replay old recovery toasts. Deltas show only the latest.
-            if (!state) recoveryNoticeAfter = agent.sourceCursor;
+            if (selectionSync) recoveryNoticeAfter = agent.sourceCursor;
             else {
                 const message = recoveryMessage(result.agent?.events, recoveryNoticeAfter);
                 if (message) showMessage(message);
                 recoveryNoticeAfter = Math.max(recoveryNoticeAfter, agent.cursor);
             }
             state = agent;
-            const key = detailKey(agent);
-            if (rendered !== key) {
-                document.querySelector('#agent-title').textContent = agent.name;
-                const effort = agent.configOptions?.find((item) => item.category === 'thought_level' || ['effort', 'thought_level'].includes(item.id));
-                document.querySelector('#agent-meta').textContent = `${agent.provider === 'claude' ? 'Claude Code' : 'Antigravity'} · ${modelLabel(agent)}${effort ? ` · 思考 ${effort.currentValue}` : ''}`;
-                const badge = document.querySelector('#agent-state');
-                badge.hidden = false;
-                badge.textContent = '';
-                badge.title = states[agent.status] || agent.status;
-                badge.setAttribute('aria-label', badge.title);
-                badge.dataset.status = agent.status;
-                usageState = agent.usage ?? usageSummary(agent);
-                const session = usageState.session;
-                document.querySelector('#usage-strip').replaceChildren(element('span', '', Number.isFinite(session.totalTokens) ? `累计 ${session.approximate ? '约 ' : ''}${tokenText(session.totalTokens)} tokens` : '累计用量未返回'), element('span', '', usageState.context ? `上下文 ${(usageState.context.used / usageState.context.size * 100).toFixed(1)}%` : '上下文未返回'));
-                // Hidden tabs retain no heavy transcript/JSON DOM from another session.
-                for (const view of ['conversation', 'usage', 'diagnostics']) {
-                    if (!viewKeys[view]?.startsWith(`${agent.id}:`)) {
-                        document.getElementById(view).replaceChildren();
-                        delete viewKeys[view];
-                    }
-                }
-                renderPermissions(agent);
-                rendered = key;
-            }
-            renderActiveView();
-            updateComposer();
+            // Revalidate metadata and permissions even when the tail cursor is
+            // unchanged; cached windows intentionally contain no approval data.
+            if (selectionSync) rendered = '';
+            selectionSync = false;
+            renderSelectedAgent();
         } else {
             state = undefined;
             rendered = '';
@@ -727,11 +749,14 @@ async function refresh(loadLegacyHistory = false) {
         if (document.querySelector('#error').dataset.scope === 'connection') showError();
         failures = 0;
     } catch (error) {
+        if (generation !== version || request.controller.signal.aborted) return;
         failures++;
         document.querySelector('#connection').textContent = '连接中断';
         showError(error.message, 'connection');
     } finally {
-        refreshing = false;
+        // A cancelled response must not clear or reschedule a newer selection.
+        if (refreshing !== request) return;
+        refreshing = undefined;
         if (pendingRefresh && !document.hidden && pageActive) { pendingRefresh = false; void refresh(); }
         else scheduleRefresh();
     }
@@ -789,14 +814,7 @@ for (const button of document.querySelectorAll('[data-filter]')) button.onclick 
     listScroll[filter] = nav.scrollTop;
     dismissMessage();
     filter = button.dataset.filter;
-    selected = undefined;
-    state = undefined;
-    clearDetail();
-    generation++;
-    rendered = '';
-    document.querySelector('#prompt').value = '';
-    previewing = false;
-    updatePreview();
+    selectSession(agents.find((agent) => filter === 'archive' ? agent.status === 'closed' : agent.status !== 'closed')?.id);
     for (const item of document.querySelectorAll('[data-filter]')) item.setAttribute('aria-pressed', String(item === button));
     renderList();
     nav.scrollTop = listScroll[filter];
@@ -820,14 +838,7 @@ document.querySelector('#create').onclick = function createAgent() {
         filter = 'current';
         document.querySelector('#search').value = '';
         for (const item of document.querySelectorAll('[data-filter]')) item.setAttribute('aria-pressed', String(item.dataset.filter === filter));
-        selected = agent.id;
-        state = undefined;
-        clearDetail();
-        generation++;
-        rendered = '';
-        document.querySelector('#prompt').value = '';
-        previewing = false;
-        updatePreview();
+        selectSession(agent.id);
         document.querySelector('[data-view="conversation"]').click();
     });
 };

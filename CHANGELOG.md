@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0-beta.4 — 2026-11-17
+
+- Switch long sessions without waiting for the previous session's UI request. Show a bounded recent-window cache immediately, then revalidate the latest state and approvals.
+- Reset live views to the newest page when missed updates exceed one page, while keeping explicit backwards history and legacy forward pagination.
+- Preserve tool labels and types when a long-running tool's initial event falls outside the latest page, without changing raw tool output or diagnostic references.
+- Refresh the owned Git marketplace registration when updating between pinned release tags. Document visiting the desktop plugin list and reopening the panel after an update.
+
 ## 1.1.0-beta.3 — 2026-11-09
 
 - Fix Windows desktop discovery of Agent Dock. Use portable Agent Plugins manifests so Codex expands the installed path before starting Node. The launcher does not need a working directory override.

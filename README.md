@@ -2,7 +2,7 @@
 
 Manage Antigravity and Claude Code as local ACP subagents from Codex desktop, with a shared conversation panel.
 
-**Windows beta · `1.1.0-beta.3` · MIT**
+**Windows beta · `1.1.0-beta.4` · MIT**
 
 Agent Dock provides root tools to create, configure, prompt, inspect, cancel and close agents. Its panel displays conversations, received thought text, grouped tool calls, permission requests, usage and archives. Chats using the same installation share the same agents. Sessions survive bridge restarts when their provider supports recovery; interrupted tasks and approvals are never automatically replayed.
 
@@ -24,17 +24,19 @@ The panel can start without either Agent being logged in. Environment checks do 
 In PowerShell:
 
 ```powershell
-codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.3
+codex plugin marketplace add https://github.com/LingYzh/agent-dock.git --ref v1.1.0-beta.4
 codex plugin add agent-dock@agent-dock
 ```
 
 Before opening the panel for the first time, run `./install.ps1 -SkipPluginRegistration` from the corresponding release to prepare the pinned runtime dependencies. A fresh dependency install can exceed the desktop's MCP startup deadline. Then refresh the desktop's plugin connection (or restart the desktop); later launches reuse the prepared runtime.
 
+After installing or upgrading through the CLI, open the desktop's plugin list once before checking **More tools**. In the Windows desktop build verified here, visiting that list refreshed the installed-plugin inventory and made Agent Dock appear without another restart. If the entry is still missing, refresh the plugin connection or fully quit and reopen the desktop.
+
 In the current chat, open the right content panel's **+ → More tools → Agent Dock**. Clicking the plugin's management card opens plugin details instead of the agent panel. You can also mention Agent Dock in the chat and ask it to open the panel or create an agent.
 
 ## Check the environment / choose another drive
 
-Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.3), or clone this repository at that tag. Run inside the extracted/cloned directory:
+Download and extract the [GitHub prerelease](https://github.com/LingYzh/agent-dock/releases/tag/v1.1.0-beta.4), or clone this repository at that tag. Run inside the extracted/cloned directory:
 
 ```powershell
 # Read-only environment report; no Agent prompts or authentication checks.
@@ -76,7 +78,11 @@ Environment variables must be visible to the desktop process; restart the deskto
 
 ## Upgrade, migration and uninstall
 
-This installation is pinned to the beta tag. To opt into a later release, use its published tag with `codex plugin marketplace add … --ref <new-tag>`, then refresh the marketplace/plugin in the desktop. A `main` source can track repository changes with `codex plugin marketplace upgrade agent-dock`; use tagged releases for reproducibility. New runtime versions use separate folders; state stays outside them.
+This installation is pinned to the beta tag. To upgrade, extract the newer release and run its `./install.ps1`. The installer checks that the target tag exists and re-registers the existing `agent-dock` source only when it is the official project Git URL. A different source with the same marketplace name requires explicit resolution; it is not removed automatically. New runtime versions use separate folders; state stays outside them.
+
+For a manual tag change, first remove the **marketplace registration**, then add the new tag and run `codex plugin add agent-dock@agent-dock` again. Removing a marketplace registration is separate from deleting session data. A `main` source can track repository changes with `codex plugin marketplace upgrade agent-dock`; use tagged releases for reproducibility.
+
+After updating, visit the desktop plugin list once and reopen Agent Dock from **More tools**. If an already open panel still shows the old interface, fully quit and reopen the desktop. Finish active Agent turns before restarting a bridge; do not delete the shared state directory.
 
 If you previously installed a development package named `agent-dock@agent-dock-local`, disable that old plugin before enabling this public source, to avoid duplicate tool registrations. To retain its existing sessions, pass its existing state directory explicitly via `-StateDirectory`. Do not run two bridge services against the same state directory. Finish or cancel active work before switching installations. The installer does not automatically stop services or modify the old package.
 
